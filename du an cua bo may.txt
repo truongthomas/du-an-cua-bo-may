@@ -1,0 +1,305 @@
+import http.server
+import socketserver
+import webbrowser
+import os
+import threading
+import time
+# 定義 HTML 與 CSS 內容
+html_content = """
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>廠區報表總覽</title>
+<style>
+        body {
+           /* 核心優化：大幅增強色彩對比與漸層張力 */
+           background-color: #060814;
+           background-image:
+               radial-gradient(at 10% 10%, rgba(30, 64, 175, 0.7) 0px, transparent 45%),  /* 強烈深藍光 */
+               radial-gradient(at 90% 10%, rgba(126, 34, 206, 0.6) 0px, transparent 45%), /* 魅惑紫光 */
+               radial-gradient(at 50% 80%, rgba(13, 148, 136, 0.4) 0px, transparent 50%), /* 底部青底光 */
+               radial-gradient(at 0% 100%, rgba(19, 24, 48, 1) 0px, transparent 70%);
+           background-attachment: fixed;
+           color: #ffffff;
+           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft JhengHei", sans-serif;
+           margin: 0;
+           padding: 25px;
+           min-height: 100vh;
+           position: relative;
+           overflow-x: hidden;
+       }
+       /* 頂部按鈕列：改為大圓角與精緻白邊線 */
+       .nav-container {
+           display: grid;
+           grid-template-columns: repeat(5, 1fr);
+           gap: 15px;
+           margin-bottom: 25px;
+       }
+       .nav-btn {
+           background: rgba(255, 255, 255, 0.06);
+           backdrop-filter: blur(12px);
+           -webkit-backdrop-filter: blur(12px);
+           border: 1px solid rgba(255, 255, 255, 0.2); /* 明確的線條 */
+           border-radius: 14px; /* 圓潤感 */
+           text-align: center;
+           padding: 16px 0;
+           font-size: 16px;
+           font-weight: bold;
+           color: #ffffff;
+           letter-spacing: 1px;
+           cursor: pointer;
+           transition: all 0.25s ease;
+       }
+       .nav-btn:hover {
+           background: rgba(255, 255, 255, 0.15);
+           border-color: rgba(255, 255, 255, 0.4);
+           transform: translateY(-2px);
+       }
+       /* 主表格網格：5欄排列 */
+       .grid-container {
+           display: grid;
+           grid-template-columns: repeat(5, 1fr);
+           gap: 20px;
+       }
+       /* 卡片主體：顯示清晰線條與大圓角 */
+       .card {
+           background: rgba(255, 255, 255, 0.04);
+           backdrop-filter: blur(16px);
+           -webkit-backdrop-filter: blur(16px);
+           /* 關鍵：顯示線條與圓潤感 */
+           border: 1.5px solid rgba(255, 255, 255, 0.25); /* 明確的玻璃外框線 */
+           border-radius: 20px; /* 超圓潤蘋果風圓角 */
+           box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+           display: flex;
+           flex-direction: column;
+           overflow: hidden;
+           transition: all 0.3s ease;
+       }
+       .card:hover {
+           border-color: rgba(255, 255, 255, 0.45);
+           background: rgba(255, 255, 255, 0.07);
+           transform: translateY(-4px);
+       }
+       /* 卡片標頭：帶有黃綠色科技感與分隔線 */
+       .card-header {
+           text-align: center;
+           padding: 14px;
+           font-weight: bold;
+           font-size: 18px;
+           letter-spacing: 1.5px;
+           color: #e2f185; /* 您喜愛的黃綠色系 */
+           background: rgba(255, 255, 255, 0.08);
+           border-bottom: 1.5px solid rgba(255, 255, 255, 0.25); /* 內部分隔線 */
+       }
+       .card-body {
+           padding: 20px;
+           flex: 1;
+       }
+       /* 列表與超連結樣式 */
+       ul {
+           list-style-type: none;
+           padding-left: 0;
+           margin: 0;
+       }
+       .main-item {
+           margin-bottom: 18px;
+           font-size: 15.5px;
+       }
+       /* 超連結 */
+       a {
+           text-decoration: none;
+           color: #ffffff;
+           transition: all 0.2s ease;
+       }
+       a.main-title {
+           font-weight: bold;
+           display: inline-block;
+       }
+       a.main-title::before {
+           content: "□ ";
+           color: rgba(255, 255, 255, 0.5);
+           margin-right: 4px;
+       }
+       a:hover {
+           color: #64b5f6; /* 亮藍色提示 */
+           text-shadow: 0 0 8px rgba(100, 181, 246, 0.6);
+       }
+       /* 子選單排版 */
+       .sub-list {
+           padding-left: 18px;
+           margin-top: 8px;
+       }
+       .sub-list li {
+           margin-bottom: 7px;
+           font-size: 14px;
+           display: flex;
+           align-items: center;
+           color: rgba(255, 255, 255, 0.8);
+       }
+       .sub-list a {
+           color: rgba(255, 255, 255, 0.85);
+       }
+       .sub-list a:hover {
+           color: #e2f185;
+       }
+       /* 模擬圖片中的小圖示 */
+       .icon-clock::before { content: "⏱ "; margin-right: 5px; opacity: 0.8; }
+       .icon-check::before { content: "☑ "; margin-right: 5px; opacity: 0.8; }
+       .icon-pen::before { content: "∠ "; margin-right: 5px; opacity: 0.8; }
+       .icon-doc::before { content: "📄 "; margin-right: 5px; opacity: 0.8; }
+       .icon-alert::before { content: "⚠️ "; margin-right: 5px; opacity: 0.8; }
+       .icon-chart::before { content: "📊 "; margin-right: 5px; opacity: 0.8; }
+       .icon-tool::before { content: "🔧 "; margin-right: 5px; opacity: 0.8; }
+       .icon-person::before { content: "👤 "; margin-right: 5px; opacity: 0.8; }
+</style>
+</head>
+<body>
+<div class="nav-container">
+<div class="nav-btn">工務部</div>
+<div class="nav-btn">行政部</div>
+<div class="nav-btn">環安部</div>
+<div class="nav-btn">進出口部</div>
+<div class="nav-btn">宿舍</div>
+</div>
+<div class="grid-container">
+<div class="card">
+<div class="card-header">工務部</div>
+<div class="card-body">
+<ul>
+<li class="main-item">
+<a href="http://localhost:9000/" target="_blank" class="custom-link">能源管理</a>
+<ul class="sub-list">
+<li class="icon-chart">電力</li>
+<li class="icon-chart">給水</li>
+</ul>
+</li>
+<li class="main-item">
+<a href="" target="_blank" class="custom-link">廠區面積管理</a>
+</li>
+</div>
+</div>
+<div class="card">
+<div class="card-header">行政部</div>
+<div class="card-body">
+<ul>
+<li class="main-item">
+<span class="main-item-title">交通差旅</span>
+<ul class="sub-list">
+<li class="icon-alert">報車異常比例</li>
+<li class="icon-check">廠車準點率</li>
+<li class="icon-doc">FCM派車數</li>
+<li class="icon-doc">接送機人數統計</li>
+<li class="icon-doc">待開機票數</li>
+</ul>
+</li>
+<li class="main-item">
+<span class="main-item-title">伙食</span>
+<ul class="sub-list">
+<li class="icon-alert">報餐異常比例</li>
+<li class="icon-alert">用餐異常記錄</li>
+</ul>
+</li>
+<li class="main-item">
+<span class="main-item-title">總務</span>
+<ul class="sub-list">
+<li class="icon-chart">清運廠商車輛數量</li>
+<li class="icon-chart">廠商超過7天未通關的報關票數</li>
+<li class="icon-chart">固資總數量</li>
+<li class="icon-chart">高爾夫球車乘客數量</li>
+<li class="icon-chart">寄出的信件數量</li>
+</ul>
+</li>
+</div>
+</div>
+<div class="card">
+<div class="card-header">環安部</div>
+<div class="card-body">
+<ul>
+<li class="main-item">
+<span class="main-item-title">安全</span>
+<ul class="sub-list">
+<li class="icon-doc">承包商安全培訓人數</li>
+<li class="icon-doc">特殊作業項目數量</li>
+<li class="icon-doc">新人職業安全第四組培訓人數</li>
+<li class="icon-doc">定期職業安全第四組培訓人數</li>
+</ul>
+</li>
+<li class="main-item">
+<span class="main-item-title">衛生</span>
+<ul class="sub-list">
+<li class="icon-doc">PVN 園區醫務室就診人數</li>
+<li class="icon-doc">入職體檢人數</li>
+<li class="icon-doc">宿舍醫務室就診人數</li>
+<li class="icon-doc">HER PROJECT 人數</li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+<div class="card">
+<div class="card-header">進出口部</div>
+<div class="card-body">
+<ul>
+<li class="main-item">
+<span class="main-item-title">???表</span>
+<ul class="sub-list">
+<li class="icon-clock">???表</li>
+<li class="icon-alert">???表</li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+<div class="card">
+<div class="card-header">宿舍</div>
+<div class="card-body">
+<ul>
+<li class="main-item">
+<span class="main-item-title">???表</span>
+<ul class="sub-list">
+<li class="icon-doc">???表</li>
+<li class="icon-alert">???表</li>
+<li class="icon-doc">W???表</li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+
+</li>
+</ul>
+</div>
+</div>
+</div>
+</body>
+</html>
+"""
+# 將 HTML 寫入本地檔案
+filename = "sfcs_dashboard.html"
+with open(filename, "w", encoding="utf-8") as f:
+   f.write(html_content)
+PORT = 8080
+class Handler(http.server.SimpleHTTPRequestHandler):
+   def log_message(self, format, *args):
+       # 覆寫 log_message 以隱藏終端機的 HTTP 請求紀錄，保持畫面乾淨
+       pass
+def start_server():
+   with socketserver.TCPServer(("", PORT), Handler) as httpd:
+       print(f"✅ 本地伺服器已啟動: http://localhost:{PORT}/{filename}")
+       print("請按 Ctrl+C 來關閉伺服器。")
+       httpd.serve_forever()
+# 使用執行緒啟動伺服器，以便能自動開啟瀏覽器
+server_thread = threading.Thread(target=start_server)
+server_thread.daemon = True
+server_thread.start()
+# 等待一小段時間確保伺服器已啟動，然後開啟瀏覽器
+time.sleep(1)
+webbrowser.open(f"http://localhost:{PORT}/{filename}")
+# 保持主程式運行
+try:
+   while True:
+       time.sleep(1)
+except KeyboardInterrupt:
+   print("\\n🛑 伺服器已關閉。")
