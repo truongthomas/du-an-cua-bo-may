@@ -1,0 +1,1203 @@
+"""
+COMBINED DASHBOARD — 一期電力 + 二期用水
+Port mặc định: 8000
+2 tab: ⚡ 電力 | 💧 用水
+Biểu đồ 6 đồng hồ nước đầu tiên (日/月/年)
+"""
+import asyncio
+import csv
+import os
+import time
+import datetime
+import json
+import threading
+import http.server
+import socketserver
+import pandas as pd
+from datetime import datetime
+from asyncua import Client
+# ============================================================
+# CẤU HÌNH
+# ============================================================
+PORT = 9000
+# --- ĐIỆN ---
+URL_ELECTRIC1  = "opc.tcp://10.177.105.140:49320"
+CSV_ELECTRIC1  = r"C:\Users\PVN_FAC\OneDrive\meter11_log水電錶.csv"
+XLSX_ELECTRIC1 = r"C:\Users\PVN_FAC\OneDrive\e1_dashboard.xlsx"
+# --- NƯỚC ---一期電
+URL_WATER2  = "opc.tcp://10.177.207.244:49320"
+CSV_WATER2  = r"C:\Users\PVN_FAC\OneDrive\meter1_log水電錶.csv"
+XLSX_WATER2 = r"C:\Users\PVN_FAC\OneDrive\water_dashboard.xlsx"
+# Đọc Chart.js offline二期水
+URL_ELECTRIC2  = "opc.tcp://10.177.207.246:49320"
+CSV_ELECTRIC2  = r"C:\Users\PVN_FAC\OneDrive\meter21_log水電錶.csv"
+XLSX_ELECTRIC2 = r"C:\Users\PVN_FAC\OneDrive\e2_dashboard.xlsx"
+# Đọc Chart.js offline二期電
+CHART_JS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chart.umd.min.js")
+CHART_JS = ""
+if os.path.exists(CHART_JS_PATH):
+   with open(CHART_JS_PATH, "r", encoding="utf-8") as f:
+       CHART_JS = f.read()
+else:
+   print(f"[WARNING] chart.min.js không tìm thấy tại {CHART_JS_PATH}")
+   print("          Biểu đồ sẽ không hiển thị trên máy không có internet.")
+# ============================================================
+# NODE ĐIỆN (thêm đủ theo file gốc)
+# ============================================================
+MY_NODES_ELECTRIC1 = {
+   "F1MP11-1電量-总開關":  "ns=2;s=OPCUA.PegatronOPC.178_F1MP11-1",
+   "F1MP11-2電量-發電機":  "ns=2;s=OPCUA.PegatronOPC.179_F1MP11-2",
+   "F1MP12-1電量-F1P11製成": "ns=2;s=OPCUA.PegatronOPC.161_F1MP12-1",
+   "F1MP13-1電量-F1P12製成": "ns=2;s=OPCUA.PegatronOPC.180_F1MP13-1",
+   "F1MP14-1電量-一樓照明":  "ns=2;s=OPCUA.PegatronOPC.162_F1MP14-1",
+   "F1MP14-2電量-一樓照明":  "ns=2;s=OPCUA.PegatronOPC.163_F1MP14-2",
+   "F1MP14-3電量-一樓照明":  "ns=2;s=OPCUA.PegatronOPC.164_F1MP14-3",
+   "F1MP14-4電量-一樓照明":  "ns=2;s=OPCUA.PegatronOPC.165_F1MP14-4",
+   "F1MP15-1電量-一樓市樓":  "ns=2;s=OPCUA.PegatronOPC.166_F1MP15-1",
+   "F1MP15-2電量-一樓电梯": "ns=2;s=OPCUA.PegatronOPC.167_F1MP15-2",
+   "F1MP15-3電量-一樓电梯": "ns=2;s=OPCUA.PegatronOPC.168_F1MP15-3",
+   "F1MP15-4電量-一樓电梯": "ns=2;s=OPCUA.PegatronOPC.169_F1MP15-4",
+   "F1MP15-5電量-一樓电梯": "ns=2;s=OPCUA.PegatronOPC.170_F1MP15-5",
+   "F1MP15-6電量-一樓电梯": "ns=2;s=OPCUA.PegatronOPC.171_F1MP15-6",
+   "F1MP16-1電量-一樓照明": "ns=2;s=OPCUA.PegatronOPC.172_F1MP16-1",
+   "F1MP16-2電量-MIS-1": "ns=2;s=OPCUA.PegatronOPC.173_F1MP16-2",
+   "F1MP16-3電量-G2JK1": "ns=2;s=OPCUA.PegatronOPC.174_F1MP16-3",
+   "F1MP16-4電量-F1PFK": "ns=2;s=OPCUA.PegatronOPC.175_F1MP16-4",
+   "F1MP16-5電量-实验室": "ns=2;s=OPCUA.PegatronOPC.176_F1MP16-5",
+   "F1MP17-1電量-連接第一和第二迴路": "ns=2;s=OPCUA.PegatronOPC.177_F1MP17-1",
+   "F1MP21-1電量-總開關": "ns=2;s=OPCUA.PegatronOPC.203_F1MP21-1",
+   "F1MP22-1電量-F1P31": "ns=2;s=OPCUA.PegatronOPC.204_F1MP22-1",
+   "F1MP23-1電量-F1P32": "ns=2;s=OPCUA.PegatronOPC.193_F1MP23-1",
+   "F1MP24-1電量-餐厅": "ns=2;s=OPCUA.PegatronOPC.194_F1MP24-1",
+   "F1MP24-2電量-空调": "ns=2;s=OPCUA.PegatronOPC.195_F1MP24-2",
+   "F1MP24-3電量-空调": "ns=2;s=OPCUA.PegatronOPC.196_F1MP24-3",
+   "F1MP24-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.207_F1MP24-4",
+   "F1MP25-1電量-实验室": "ns=2;s=OPCUA.PegatronOPC.197_F1MP25-1",
+   "F1MP25-2電量-电梯": "ns=2;s=OPCUA.PegatronOPC.198_F1MP25-2",
+   "F1MP25-3電量-实验室": "ns=2;s=OPCUA.PegatronOPC.199_F1MP25-3",
+   "F1MP25-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.208_F1MP25-4",
+   "F1MP25-5電量-預留": "ns=2;s=OPCUA.PegatronOPC.209_F1MP25-5",
+   "F1MP26-1電量-实验室": "ns=2;s=OPCUA.PegatronOPC.210_F1MP26-1",
+   "F1MP26-2電量-MIS-2": "ns=2;s=OPCUA.PegatronOPC.200_F1MP26-2",
+   "F1MP26-3電量-G2JK1": "ns=2;s=OPCUA.PegatronOPC.201_F1MP26-3",
+   "F1MP26-4電量-F1PFK": "ns=2;s=OPCUA.PegatronOPC.202_F1MP26-4",
+   "F1MP26-5電量-預留": "ns=2;s=OPCUA.PegatronOPC.211_F1MP26-5",
+   "F1MP26-6電量-預留": "ns=2;s=OPCUA.PegatronOPC.212_F1MP26-6",
+   "F2MP11-1電量-總開關": "ns=2;s=OPCUA.PegatronOPC.1_F2MP11",
+   "F2MP12-1電量-F2P11": "ns=2;s=OPCUA.PegatronOPC.2_F2MP12-1",
+   "F2MP12-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.15_F2MP12-2",
+   "F2MP13-1電量-F2P32": "ns=2;s=OPCUA.PegatronOPC.3_F2MP13-1",
+   "F2MP13-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.16_F2MP13-2",
+   "F2MP14-1電量-实验室": "ns=2;s=OPCUA.PegatronOPC.4_F2MP14-1",
+   "F2MP14-2電量-一樓照明": "ns=2;s=OPCUA.PegatronOPC.5_F2MP14-2",
+   "F2MP14-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.6_F2MP14-3",
+   "F2MP14-4電量-一樓照明": "ns=2;s=OPCUA.PegatronOPC.7_F2MP14-4",
+   "F2MP15-1電量-电梯": "ns=2;s=OPCUA.PegatronOPC.17_F2MP15-1",
+   "F2MP15-2電量-电梯": "ns=2;s=OPCUA.PegatronOPC.8_F2MP15-2",
+   "F2MP15-3電量-电梯": "ns=2;s=OPCUA.PegatronOPC.9_F2MP15-3",
+   "F2MP15-4電量-电梯": "ns=2;s=OPCUA.PegatronOPC.10_F2MP15-4",
+   "F2MP15-5電量-电梯": "ns=2;s=OPCUA.PegatronOPC.18_F2MP15-5",
+   "F2MP15-6電量-电梯": "ns=2;s=OPCUA.PegatronOPC.19_F2MP15-6",
+   "F2MP16-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.11_F2MP16-1",
+   "F2MP16-2電量-照明": "ns=2;s=OPCUA.PegatronOPC.12_F2MP16-2",
+   "F2MP16-3電量-实验室": "ns=2;s=OPCUA.PegatronOPC.13_F2MP16-3",
+   "F2MP16-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.20_F2MP16-4",
+   "F2MP16-5電量-預留": "ns=2;s=OPCUA.PegatronOPC.21_F2MP16-5",
+   "F2MP17-1電量-連接第一和第二迴路": "ns=2;s=OPCUA.PegatronOPC.14_F2MP17-1",
+   "F2MP21-1電量-總開關": "ns=2;s=OPCUA.PegatronOPC.33_F2MP21",
+   "F2MP22-1電量-F2P31": "ns=2;s=OPCUA.PegatronOPC.34_F2MP22-1",
+   "F2MP23-1電量-F2P12": "ns=2;s=OPCUA.PegatronOPC.35_F2MP23-1",
+   "F2MP24-1電量-空调": "ns=2;s=OPCUA.PegatronOPC.36_F2MP24-1",
+   "F2MP24-2電量-空调": "ns=2;s=OPCUA.PegatronOPC.37_F2MP24-2",
+   "F2MP24-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.38_F2MP24-3",
+   "F2MP24-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.39_F2MP24-4",
+   "F2MP25-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.40_F2MP25-1",
+   "F2MP25-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.41_F2MP25-2",
+   "F2MP25-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.42_F2MP25-3",
+   "F2MP25-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.43_F2MP25-4",
+   "F2MP25-5電量-預留": "ns=2;s=OPCUA.PegatronOPC.44_F2MP25-5",
+   "F2MP26-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.45_F2MP26-1",
+   "F2MP26-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.46_F2MP26-2",
+   "F2MP26-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.47_F2MP26-3",
+   "F2MP26-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.48_F2MP26-4",
+   "F2MP26-5電量-預留": "ns=2;s=OPCUA.PegatronOPC.49_F2MP26-5",
+   "F2MP26-6電量-預留": "ns=2;s=OPCUA.PegatronOPC.50_F2MP26-6",
+   "U1MP11-1電量-總開關": "ns=2;s=OPCUA.PegatronOPC.385_U1MP11-1",
+   "U1MP11-2電量-發電機": "ns=2;s=OPCUA.PegatronOPC.396_U1MP11-2",
+   "U1MP12-1電量-空调": "ns=2;s=OPCUA.PegatronOPC.386_U1MP12-1",
+   "U1MP12-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.397_U1MP12-2",
+   "U1MP13-1電量-空调": "ns=2;s=OPCUA.PegatronOPC.387_U1MP13-1",
+   "U1MP13-2電量-空调": "ns=2;s=OPCUA.PegatronOPC.388_U1MP13-2",
+   "U1MP13-3電量-空调": "ns=2;s=OPCUA.PegatronOPC.389_U1MP13-3",
+   "U1MP13-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.398_U1MP13-4",
+   "U1MP14-1電量-空压": "ns=2;s=OPCUA.PegatronOPC.390_U1MP14-1",
+   "U1MP14-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.399_U1MP14-2",
+   "U1MP15-1電量-空调": "ns=2;s=OPCUA.PegatronOPC.391_U1MP15-1",
+   "U1MP15-2電量-一樓照明": "ns=2;s=OPCUA.PegatronOPC.400_U1MP15-2",
+   "U1MP15-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.401_U1MP15-3",
+   "U1MP15-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.402_U1MP15-4",
+   "U1MP15-5電量-一樓照明": "ns=2;s=OPCUA.PegatronOPC.392_U1MP15-5",
+   "U1MP15-6電量-生活水泵": "ns=2;s=OPCUA.PegatronOPC.393_U1MP15-6",
+   "U1MP16-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.403_U1MP16-1",
+   "U1MP16-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.404_U1MP16-2",
+   "U1MP16-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.405_U1MP16-3",
+   "U1MP16-4電量-一樓照明": "ns=2;s=OPCUA.PegatronOPC.394_U1MP16-4",
+   "U1MP17電量-連接第一和第二迴路": "ns=2;s=OPCUA.PegatronOPC.395_U1MP17",
+   "U1MP21電量-總開關": "ns=2;s=OPCUA.PegatronOPC.236_U1MP21",
+   "U1MP22-1電量-空调": "ns=2;s=OPCUA.PegatronOPC.237_U1MP22-1",
+   "U1MP22-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.244_U1MP22-2",
+   "U1MP23-1電量-空调": "ns=2;s=OPCUA.PegatronOPC.238_U1MP23-1",
+   "U1MP23-2電量-空调": "ns=2;s=OPCUA.PegatronOPC.239_U1MP23-2",
+   "U1MP23-3電量-空调": "ns=2;s=OPCUA.PegatronOPC.240_U1MP23-3",
+   "U1MP23-4電量-制程": "ns=2;s=OPCUA.PegatronOPC.241_U1MP23-4",
+   "U1MP24-1電量-空压": "ns=2;s=OPCUA.PegatronOPC.242_U1MP24-1",
+   "U1MP24-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.250_U1MP24-2",
+   "U1MP25-1電量-空调": "ns=2;s=OPCUA.PegatronOPC.243_U1MP25-1",
+   "U1MP25-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.245_U1MP25-2",
+   "U1MP25-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.246_U1MP25-3",
+   "U1MP25-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.247_U1MP25-4",
+   "U1MP25-5電量-預留": "ns=2;s=OPCUA.PegatronOPC.248_U1MP25-5",
+   "U1MP25-6電量-預留": "ns=2;s=OPCUA.PegatronOPC.249_U1MP25-6",
+   "U1MP26-1電量-空调": "ns=2;s=OPCUA.PegatronOPC.251_U1MP26-1",
+   "U1MP26-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.252_U1MP26-2",
+   "U1MP26-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.253_U1MP26-3",
+   "U1MP26-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.254_U1MP26-4",
+   "F1ML11電量-一樓總照明": "ns=2;s=OPCUA.PegatronOPC.255_F1ML11",
+   "F1L11電量-一樓照明": "ns=2;s=OPCUA.PegatronOPC.225_F1L11",
+   "F1L12電量-一樓照明": "ns=2;s=OPCUA.PegatronOPC.226_F1L12",
+   "F1L21電量-二樓照明": "ns=2;s=OPCUA.PegatronOPC.227_F1L21",
+   "F1L31電量-三樓照明": "ns=2;s=OPCUA.PegatronOPC.228_F1L31",
+   "F1L32電量-三樓照明": "ns=2;s=OPCUA.PegatronOPC.229_F1L32",
+   "F1JM11電量-一樓照明": "ns=2;s=OPCUA.PegatronOPC.230_F1JM11",
+   "F1EL11電量-一樓照明": "ns=2;s=OPCUA.PegatronOPC.257_F1EL11",
+   "F1PS1電量-RO機房電源": "ns=2;s=OPCUA.PegatronOPC.231_F1PS1",
+   "F1LS1電量-室外照明": "ns=2;s=OPCUA.PegatronOPC.232_LS1",
+   "F1GR1L1電量-一樓照明": "ns=2;s=OPCUA.PegatronOPC.233_GR1L1",
+   "F1AC11電量-一樓空调": "ns=2;s=OPCUA.PegatronOPC.234_F1AC11",
+   "F1AC21電量-二樓空调": "ns=2;s=OPCUA.PegatronOPC.235_F1AC21",
+   # ... thêm node điện còn lại ...
+}
+F1_COLS = (0, 38)
+F2_COLS = (38, 77)
+U1_COLS = (77, 117)
+# ============================================================
+# NODE NƯỚC (từ water phase 2.py)
+# ============================================================
+BASE_W = "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1"
+MY_NODES_WATER2 = {
+   "F5_生活水池進水": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.CUB水池15DN200",
+   "F5_消防水池進水": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.CUB水池14DN200",
+   "F3_生活水箱(一)(二)": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.F3生活水箱(一)(二)12DN100",
+   "F4_生活水箱(一)(二)": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.F4生活水箱(一)(二)10DN150",
+   "F5_生活水箱(一)(二)": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.F5生活水箱(一)(二)11DN150",
+   "F5_生活水箱(三)": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.F5生活水箱(三)13DN150",
+   "F3_總管沖廁所": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-厂房F3加压给水管1DN32",
+   "F3_總管洗手池": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-厂房F3加压给水管2DN40",
+   "F4_總管沖廁所": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-501-SB.F45F总管DN150",
+   "F4_總管洗手池": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-501-SB.F45F总管2DN150",
+   "F5_總管沖廁所": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5F生活水箱二進水預留-1",
+   "F5_總管洗手池": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5F生活水箱二進水預留-2",
+    "KD_總管": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5F生活水箱二進水預留-3",
+    "HR_總管": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-自厂房F3加压生活给水管DN32",
+    "F3_1F司机厕所": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-1F司机厕所3DN32",
+    "F3_1F男女厕所（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-1F男女厕所2（一）DN32",
+    "F3_1F男女厕所（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-1F男女厕所1（一）DN40",
+    "F3_1F男女厕所（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-1F男女厕所6（二）DN40",
+    "F3_1F男女厕所（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-1F男女厕所7（二）DN40",
+    "F3_1F男女厕所（三）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-1F男女厕所4（三）DN32",
+    "F3_1F男女厕所（三）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-1F男女厕所5（三）DN32",
+    "F3_2F男女厕所（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-2F男女厕所2（一）DN50",
+    "F3_2F男女厕所（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-2F男女厕所1（一）DN40",
+    "F3_2F男女厕所（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-2F男女厕所3（二）DN40",
+    "F3_2F男女厕所（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-201-SB.F3-2F男女厕所4（二）DN40",
+    "F3_3F男女厕所（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-R03-FCU/SB.F3-3F男女厕所1（一）",
+    "F3_3F男女厕所（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-R03-FCU/SB.F3-3F男女厕所2（一）",
+    "F3_3F男女厕所（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-R03-FCU/SB.F3-3F男女厕所3（二）",
+    "F3_3F男女厕所（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-R03-FCU/SB.F3-3F男女厕所4（二）",
+    "F3_4F男女厕所（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-R03-FCU/SB.F3-4F男女厕所3（一）",
+    "F3_4F男女厕所（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-R03-FCU/SB.F3-4F男女厕所4（一）",
+    "F3_4F男女厕所（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-R03-FCU/SB.F3-4F男女厕所5（二）",
+    "F3_4F男女厕所（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F3-R03-FCU/SB.F3-4F男女厕所6（一）",
+    "F4_1F司机厕所": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-101-SB.F41F司机厕所DN32",
+    "F4_1F大廳男女厕所（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-101-SB.F41F厕所（二）DN25",
+    "F4_1F大廳男女厕所（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-101-SB.F41F厕所（二）DN32",
+    "F4_1F女厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-101-SB.F41F女厕（一）DN65",
+    "F4_1F女厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-101-SB.F41F女厕（一）DN50",
+    "F4_1F男厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-101-SB.F41F男厕（一）DN50",
+    "F4_1F男厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-101-SB.F41F男厕（一）DN32",
+    "F4_3F女厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-301-SB.F43F女厕（一）DN65",
+    "F4_3F女厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-301-SB.F43F女厕（一）DN50",
+    "F4_3F女厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-301-SB.F43F女厕（二）DN65",
+    "F4_3F女厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-301-SB.F43F女厕（二）DN50",
+    "F4_3F男厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-301-SB.F43F男厕（一）DN50",
+    "F4_3F男厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-301-SB.F43F男厕（一）DN32",
+    "F4_3F男厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-301-SB.F43F男厕（二）DN50",
+    "F4_3F男厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-301-SB.F43F男厕（二）DN32",
+    "F4_4F女厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-401-SB.F44F女厕（一）DN65",
+    "F4_4F女厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-401-SB.F44F女厕（一）DN50",
+    "F4_4F女厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-401-SB.F44F女厕（二）DN65",
+    "F4_4F女厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-401-SB.F44F女厕（二）DN50",
+    "F4_4F男厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-401-SB.F44F男厕（一）DN50",
+    "F4_4F男厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-401-SB.F44F男厕（一）DN32",
+    "F4_4F男厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-401-SB.F44F男厕（二）DN50",
+    "F4_4F男厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-401-SB.F44F男厕（二）DN32",
+    "F4_5F女厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-501-SB.F45F女厕（一）DN65",
+    "F4_5F女厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-501-SB.F45F女厕（一）DN50",
+    "F4_5F女厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-501-SB.F45F女厕（二）DN65",
+    "F4_5F女厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-501-SB.F45F女厕（二）DN50",
+    "F4_5F男厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-501-SB.F45F男厕（一）DN50",
+    "F4_5F男厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-501-SB.F45F男厕（一）DN32",
+    "F4_5F男厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-501-SB.F45F男厕（二）DN50",
+    "F4_5F男厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-501-SB.F45F男厕（二）DN32",
+    "F4_RF洗衣间": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-R03.1-RF洗衣间",
+    "F4_RF洗眼器": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-R03.2-洗眼器",
+    "F4_RF溶剂室": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-R03.3-RF溶剂室",
+    "F4_RF冷却水塔补水预留1": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F4-R03.4-屋面冷却水塔补水预留",
+    "F5_1F司機厕所": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.F51F司機厕所16DN32",
+    "F5_1F女厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.1F女厕（一）8DN50",
+    "F5_1F女厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.1F女厕（一）9DN65",
+    "F5_1F男厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.1F男厕（一）6DN50",
+    "F5_1F男厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.1F男厕（一）7DN32",
+    "F5_3F女厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-301-FCU.F53F女厕（一）DN50",
+    "F5_3F女厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-301-FCU.F53F女厕（一）DN65",
+    "F5_3F女厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-301-FCU.F53F女厕（二）DN50",
+    "F5_3F女厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-301-FCU.F53F女厕（二）DN65",
+    "F5_3F男厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-301-FCU.F53F男厕（一）DN32",
+    "F5_3F男厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-301-FCU.F53F男厕（一）DN50",
+    "F5_3F男厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-301-FCU.F53F男厕（二）DN32",
+    "F5_3F男厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-301-FCU.F53F男厕（二）DN50",
+    "F5_4F女厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.12-4F女厕（一）",
+    "F5_4F女厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.13-4F女厕（一）",
+    "F5_4F女厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.7-4F女厕（二）",
+    "F5_4F女厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.6-4F女厕（二）",
+    "F5_4F男厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.11-4F男厕（一）",
+    "F5_4F男厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.10-4F男厕（一）",
+    "F5_4F男厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.8-4F男厕（二）",
+    "F5_4F男厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.9-4F男厕（二）",
+    "F5_5F女厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5F女厕所(一)-2",
+    "F5_5F女厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5F女厕所(一)-1",
+    "F5_5F女厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5F女厕所(二)-2",
+    "F5_5F女厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5F女厕所(二)-1",
+    "F5_5F男厕（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5F男厕所(一)-1",
+    "F5_5F男厕（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5F男厕所(一)-2",
+    "F5_5F男厕（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5F男厕所(二)-2",
+    "F5_5F男厕（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5F男厕所(二)-1",
+    "F5_RF冷却水塔补水预留1": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-R04-SB.1-屋面冷却水塔补水预留",
+    "F5_RF冷却水塔补水预留2": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-R04-SB.2-屋面冷却水塔补水预留",
+    "F5_RF冷却水塔补水预留3": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-R04-SB.3-屋面冷却水塔补水预留",
+    "F5_RF生饮水机房补水": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-R04-SB.5-生饮水机房补水",
+    "F5_RF溶剂室": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-R04-SB.4-RF溶剂室",
+    "F5_RF洗眼器": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-R04-SB.6-洗眼器",
+    "F5_RF洗衣间": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-R04-SB.7-RF洗衣间",
+    "KD_1F实验室": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.实验室加压给水预留Dn40",
+    "KD_1F男女厕所（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.KD1F男女厕（二）4DN40",
+    "KD_1F男女厕所（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.KD1F男女厕（二）3DN40",
+    "KD_2F男女厕所（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.KD2F男女厕所1DN40",
+    "KD_2F男女厕所（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-202-FCU.KD2F男女厕所2DN50",
+    "KD_3F实验室": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-301-FCU.F5KD3F实验室",
+    "KD_3F男女厕所（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-301-FCU.F5KD3F男女厕所（三）DN40",
+    "KD_3F男女厕所（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-301-FCU.KD3F男女厕所（三）DN50",
+    "KD_4F男女厕所（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.2-4FKD厕所（一）",
+    "KD_4F男女厕所（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.1-4FKD厕所（一）",
+    "KD_4F男女厕所（三）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.4-4FKD男女厕所（三）",
+    "KD_4F男女厕所（三）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.5-4FKD男女厕所（三）",
+    "KD_4F厨房加压给水": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-405.3-4FKD厨房加压给水预留",
+    "KD_5F男女厕所（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5FKD男女厕所-1",
+    "KD_5F男女厕所（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5FKD男女厕所-2",
+    "KD_5F男女厕所（三）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5FKD男女厕所(三)-2",
+    "KD_5F男女厕所（三）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5FKD男女厕所(三)-1",
+    "KD_5F厨房加压给水": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-5FKD厨房加压给水预留",
+    "KD_6F男女厕所（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-6FKD厕所-2",
+    "KD_6F男女厕所（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-6FKD厕所-1",
+    "KD_6F男女厕所（三）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-6FKD男女厕所-1",
+    "KD_6F男女厕所（三）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-6FKD男女厕所-2",
+    "KD_6F厨房加压给水": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.F5-601-FCU.F5-6FKD厨房加压给水预留",
+    "HR_1F男女厕所（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.HR-101-SB.1F男女厕所1（一）DN50",
+    "HR_1F男女厕所（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.HR-101-SB.1F男女厕所2（一）DN50",
+    "HR_2F男女厕所（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.HR-101-SB.2F男女厕所1（一）DN40",
+    "HR_2F男女厕所（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.HR-101-SB.2F男女厕所2（一）DN40",
+    "HR_2F男女厕所（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.HR-101-SB.2F男女厕所4（二）DN40",
+    "HR_2F男女厕所（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.HR-101-SB.2F男女厕所5（二）DN50",
+    "HR_2F茶水间": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.HR-101-SB.2F茶水间3DN20",
+    "HR_3F男女厕所（一）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.HR-101-SB.3F男女厕所1（一）DN40",
+    "HR_3F男女厕所（一）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.HR-101-SB.3F男女厕所2（一）DN40",
+    "HR_3F男女厕所（二）洗": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.HR-101-SB.3F男女厕所3（二）DN40",
+    "HR_3F男女厕所（二）沖": "ns=2;s=PEGA-BMS-II.WINCC.@LOCALMACHINE::.Modbus TCPIP.Modbus TCP/IP 单元 #1.HR-101-SB.3F男女厕所4（二）DN50",
+}
+# Ngưỡng cảnh báo nước
+WATER_LIMITS = {
+   "F5_生活水池進水":   100,
+   "F5_消防水池進水":   50,
+   "F3_生活水箱(一)(二)": 5,
+   "F4_生活水箱(一)(二)": 5,
+   "F5_生活水箱(一)(二)": 5,
+   "F5_生活水箱(三)":   5,
+   "F3_總管沖廁所":    0,
+   "F3_總管洗手池":    0,
+   "F4_總管沖廁所":    0,
+}
+# 6 đồng hồ đầu dùng cho biểu đồ
+WATER_CHART_KEYS = list(MY_NODES_WATER2.keys())[:6]
+# ============================================================
+# NODE ĐIỆN (thêm đủ theo file gốc)二期電
+# ============================================================
+MY_NODES_ELECTRIC2 = {
+   "F3MP11電量-總開關": "ns=2;s=OPCUA.PegatronOPC.14_F3MP11",
+   "F3MP21電量-總開關": "ns=2;s=OPCUA.PegatronOPC.41_F3MP21",
+   "F3MP12-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.15_F3MP12-1",
+   "F3MP12-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.16_F3MP12-2",
+   "F3MP13-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.17_F3MP13-1",
+   "F3MP13-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.18_F3MP13-2",
+   "F3MP14-1電量-照明": "ns=2;s=OPCUA.PegatronOPC.1_F3MP14-1",
+   "F3MP14-2電量-照明": "ns=2;s=OPCUA.PegatronOPC.2_F3MP14-2",
+   "F3MP14-3電量-空調": "ns=2;s=OPCUA.PegatronOPC.3_F3MP14-3",
+   "F3MP14-5電量-照明": "ns=2;s=OPCUA.PegatronOPC.19_F3MP14-5",
+   "F3MP14-6電量-空調": "ns=2;s=OPCUA.PegatronOPC.5_F3MP14-6",
+   "F3MP15-1電量-電梯": "ns=2;s=OPCUA.PegatronOPC.6_F3MP15-1",
+   "F3MP15-2電量-電梯": "ns=2;s=OPCUA.PegatronOPC.7_F3MP15-2",
+   "F3MP15-3電量-電梯": "ns=2;s=OPCUA.PegatronOPC.8_F3MP15-3",
+   "F3MP15-4電量-空調": "ns=2;s=OPCUA.PegatronOPC.9_F3MP15-4",
+   "F3MP15-6電量-空調": "ns=2;s=OPCUA.PegatronOPC.20_F3MP15-6",
+   "F3MP16-1電量-消防": "ns=2;s=OPCUA.PegatronOPC.11_F3MP16-1",
+   "F3MP16-2電量-消防": "ns=2;s=OPCUA.PegatronOPC.12_F3MP16-2",
+   "F3MP17-1電量-聯絡櫃": "ns=2;s=OPCUA.PegatronOPC.13_F3MP17-1",
+   "F3MP22-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.42_F3MP22-1",
+   "F3MP22-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.43_F3MP22-2",
+   "F3MP23-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.44_F3MP23-1",
+   "F3MP23-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.45_F3MP23-2",
+   "F3MP24-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.46_F3MP24-2",
+   "F3MP24-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.47_F3MP24-3",
+   "F3MP24-4電量-空調": "ns=2;s=OPCUA.PegatronOPC.34_F3MP24-4",
+   "F3MP24-5電量-照明": "ns=2;s=OPCUA.PegatronOPC.35_F3MP24-5",
+   "F3MP24-6電量-照明": "ns=2;s=OPCUA.PegatronOPC.36_F3MP24-6",
+   "F3MP25-2電量-空調": "ns=2;s=OPCUA.PegatronOPC.48_F3MP25-2",
+   "F3MP25-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.49_F3MP25-3",
+   "F3MP25-4電量-空調": "ns=2;s=OPCUA.PegatronOPC.38_F3MP25-4",
+   "F3MP25-5電量-電梯": "ns=2;s=OPCUA.PegatronOPC.39_F3MP25-5",
+   "F3MP25-6電量-電梯": "ns=2;s=OPCUA.PegatronOPC.40_F3MP25-6",
+   "F3MP26-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.50_F3MP26-1",
+   "F3MP26-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.51_F3MP26-2",
+   "F3MP26-4電量-G2JK1照明": "ns=2;s=OPCUA.PegatronOPC.52_F3MP26-4",
+   "F3MP26-5電量-空調": "ns=2;s=OPCUA.PegatronOPC.54_F3MP26-5",
+
+   "F3MP14-4電量-HR照明": "ns=2;s=OPCUA.PegatronOPC.4_F3MP14-4",
+   "F3MP15-5電量-HR空調": "ns=2;s=OPCUA.PegatronOPC.10_F3MP15-5",
+   "F3MP24-1電量-HR照明": "ns=2;s=OPCUA.PegatronOPC.33_F3MP24-1",
+   "F3MP25-1電量-HR空調": "ns=2;s=OPCUA.PegatronOPC.37_F3MP25-1",
+   "F3MP26-3電量-HR照明": "ns=2;s=OPCUA.PegatronOPC.53_F3MP26-3",
+
+   "F4MP11電量-總開關": "ns=2;s=OPCUA.PegatronOPC.312_F4MP11",
+   "F4MP21電量-總開關": "ns=2;s=OPCUA.PegatronOPC.343_F4MP21",
+   "F4MP12-1電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.303_F4MP12-1",
+   "F4MP12-2電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.304_F4MP12-2",
+   "F4MP13-1電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.305_F4MP13-1",
+   "F4MP13-2電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.306_F4MP13-2",
+   "F4MP14-1電量-空調": "ns=2;s=OPCUA.PegatronOPC.289_F4MP14-1",
+   "F4MP14-2電量-空調": "ns=2;s=OPCUA.PegatronOPC.290_F4MP14-2",
+   "F4MP14-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.307_F4MP14-3",
+   "F4MP14-4電量-空調": "ns=2;s=OPCUA.PegatronOPC.291_F4MP14-4",
+   "F4MP14-5電量-照明": "ns=2;s=OPCUA.PegatronOPC.292_F4MP14-5",
+   "F4MP14-6電量-照明": "ns=2;s=OPCUA.PegatronOPC.293_F4MP14-6",
+   "F4MP14-7電量-照明": "ns=2;s=OPCUA.PegatronOPC.294_F4MP14-7",
+   "F4MP15-1電量-電梯": "ns=2;s=OPCUA.PegatronOPC.295_F4MP15-1",
+   "F4MP15-2電量-電梯": "ns=2;s=OPCUA.PegatronOPC.296_F4MP15-2",
+   "F4MP15-3電量-電梯": "ns=2;s=OPCUA.PegatronOPC.297_F4MP15-3",
+   "F4MP15-4電量-電梯": "ns=2;s=OPCUA.PegatronOPC.298_F4MP15-4",
+   "F4MP15-5電量-預留": "ns=2;s=OPCUA.PegatronOPC.308_F4MP15-5",
+   "F4MP15-6電量-空調": "ns=2;s=OPCUA.PegatronOPC.299_F4MP15-6",
+   "F4MP16-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.310_F4MP16-1",
+   "F4MP16-2電量-消防": "ns=2;s=OPCUA.PegatronOPC.300_F4MP16-2",
+   "F4MP16-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.311_F4MP16-3",
+   "F4MP16-4電量-消防": "ns=2;s=OPCUA.PegatronOPC.301_F4MP16-4",
+   "F4MP16-5電量-空調": "ns=2;s=OPCUA.PegatronOPC.302_F4MP16-5",
+   "F4MP16-6電量-預留": "ns=2;s=OPCUA.PegatronOPC.314_F4MP16-6",
+   "F4MP17電量-聯絡櫃": "ns=2;s=OPCUA.PegatronOPC.313_F4MP17",
+   "F4MP22-1電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.331_F4MP22-1",
+   "F4MP22-2電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.332_F4MP22-2",
+   "F4MP23-1電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.333_F4MP23-1",
+   "F4MP23-2電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.334_F4MP23-2",
+   "F4MP24-1電量-空調": "ns=2;s=OPCUA.PegatronOPC.321_F4MP24-1",
+   "F4MP24-2電量-空調": "ns=2;s=OPCUA.PegatronOPC.322_F4MP24-2",
+   "F4MP24-3電量-照明": "ns=2;s=OPCUA.PegatronOPC.323_F4MP24-3",
+   "F4MP24-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.335_F4MP24-4",
+   "F4MP24-5電量-照明": "ns=2;s=OPCUA.PegatronOPC.324_F4MP24-5",
+   "F4MP24-6電量-預留": "ns=2;s=OPCUA.PegatronOPC.336_F4MP24-6",
+   "F4MP24-7電量-空調": "ns=2;s=OPCUA.PegatronOPC.325_F4MP24-7",
+   "F4MP25-1電量-電梯": "ns=2;s=OPCUA.PegatronOPC.326_F4MP25-1",
+   "F4MP25-2電量-電梯": "ns=2;s=OPCUA.PegatronOPC.327_F4MP25-2",
+   "F4MP25-3電量-電梯": "ns=2;s=OPCUA.PegatronOPC.328_F4MP25-3",
+   "F4MP25-4電量-電梯": "ns=2;s=OPCUA.PegatronOPC.329_F4MP25-4",
+   "F4MP25-5電量-空調": "ns=2;s=OPCUA.PegatronOPC.330_F4MP25-5",
+   "F4MP26-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.337_F4MP26-1",
+   "F4MP26-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.338_F4MP26-2",
+   "F4MP26-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.339_F4MP26-3",
+   "F4MP26-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.340_F4MP26-4",
+   "F4MP26-5電量-預留": "ns=2;s=OPCUA.PegatronOPC.341_F4MP26-5",
+   "F4MP26-6電量-預留": "ns=2;s=OPCUA.PegatronOPC.342_F4MP26-6",
+   "F4MP26-7電量-空調": "ns=2;s=OPCUA.PegatronOPC.344_F4MP26-7",
+
+   "F5MP11電量-總開關": "ns=2;s=OPCUA.PegatronOPC.592_F5MP11",
+   "F5MP21電量-總開關": "ns=2;s=OPCUA.PegatronOPC.624_F5MP21",
+   "F5MP12-1電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.593_F5MP12-1",
+   "F5MP12-2電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.594_F5MP12-2",
+   "F5MP13-1電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.595_F5MP13-1",
+   "F5MP13-2電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.596_F5MP13-2",
+   "F5MP14-1電量-KD2照明": "ns=2;s=OPCUA.PegatronOPC.577_F5MP14-1",
+   "F5MP14-2電量-空調": "ns=2;s=OPCUA.PegatronOPC.578_F5MP14-2",
+   "F5MP14-3電量-照明": "ns=2;s=OPCUA.PegatronOPC.579_F5MP14-3",
+   "F5MP14-4電量-照明": "ns=2;s=OPCUA.PegatronOPC.580_F5MP14-4",
+   "F5MP14-5電量-照明": "ns=2;s=OPCUA.PegatronOPC.581_F5MP14-5",
+   "F5MP14-6電量-照明": "ns=2;s=OPCUA.PegatronOPC.582_F5MP14-6",
+   "F5MP15-1電量-空調": "ns=2;s=OPCUA.PegatronOPC.583_F5MP15-1",
+   "F5MP15-2電量-KD2餐廳": "ns=2;s=OPCUA.PegatronOPC.584_F5MP15-2",
+   "F5MP15-3電量-電梯": "ns=2;s=OPCUA.PegatronOPC.585_F5MP15-3",
+   "F5MP15-4電量-電梯": "ns=2;s=OPCUA.PegatronOPC.586_F5MP15-4",
+   "F5MP15-5電量-電梯": "ns=2;s=OPCUA.PegatronOPC.587_F5MP15-5",
+   "F5MP15-6電量-電梯": "ns=2;s=OPCUA.PegatronOPC.588_F5MP15-6",
+   "F5MP16-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.597_F5MP16-1",
+   "F5MP16-2電量-KD2 MIS": "ns=2;s=OPCUA.PegatronOPC.598_F5MP16-2",
+   "F5MP16-3電量-空調": "ns=2;s=OPCUA.PegatronOPC.589_F5MP16-3",
+   "F5MP16-4電量-預留": "ns=2;s=OPCUA.PegatronOPC.599_F5MP16-4",
+   "F5MP16-5電量-空調": "ns=2;s=OPCUA.PegatronOPC.590_F5MP16-5",
+   "F5MP16-6電量-預留": "ns=2;s=OPCUA.PegatronOPC.600_F5MP16-6",
+   "F5MP17-1電量-聯絡櫃": "ns=2;s=OPCUA.PegatronOPC.591_F5MP17-1",
+   "F5MP22-1電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.625_F5MP22-1",
+   "F5MP22-2電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.626_F5MP22-2",
+   "F5MP23-1電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.627_F5MP23-1",
+   "F5MP23-2電量-產線製成": "ns=2;s=OPCUA.PegatronOPC.628_F5MP23-2",
+   "F5MP24-1電量-空調": "ns=2;s=OPCUA.PegatronOPC.609_F5MP24-1",
+   "F5MP24-2電量-空調": "ns=2;s=OPCUA.PegatronOPC.610_F5MP24-2",
+   "F5MP24-3電量-空調": "ns=2;s=OPCUA.PegatronOPC.611_F5MP24-3",
+   "F5MP24-4電量-照明": "ns=2;s=OPCUA.PegatronOPC.612_F5MP24-4",
+   "F5MP24-5電量-照明": "ns=2;s=OPCUA.PegatronOPC.613_F5MP24-5",
+   "F5MP25-1電量-照明": "ns=2;s=OPCUA.PegatronOPC.614_F5MP25-1",
+   "F5MP25-2電量-電梯": "ns=2;s=OPCUA.PegatronOPC.615_F5MP25-2",
+   "F5MP25-3電量-電梯": "ns=2;s=OPCUA.PegatronOPC.616_F5MP25-3",
+   "F5MP25-4電量-電梯": "ns=2;s=OPCUA.PegatronOPC.617_F5MP25-4",
+   "F5MP25-5電量-電梯": "ns=2;s=OPCUA.PegatronOPC.618_F5MP25-5",
+   "F5MP25-6電量-KD2照明": "ns=2;s=OPCUA.PegatronOPC.619_F5MP25-6",
+   "F5MP25-7電量-預留": "ns=2;s=OPCUA.PegatronOPC.629_F5MP25-7",
+   "F5MP26-1電量-KD2 MIS": "ns=2;s=OPCUA.PegatronOPC.630_F5MP26-1",
+   "F5MP26-2電量-KD2餐廳": "ns=2;s=OPCUA.PegatronOPC.620_F5MP26-2",
+   "F5MP26-3電量-KD2餐廳": "ns=2;s=OPCUA.PegatronOPC.621_F5MP26-3",
+   "F5MP26-4電量-空調": "ns=2;s=OPCUA.PegatronOPC.622_F5MP26-4",
+   "F5MP26-5電量-空調": "ns=2;s=OPCUA.PegatronOPC.623_F5MP26-5",
+   "F5MP26-6電量-預留": "ns=2;s=OPCUA.PegatronOPC.631_F5MP26-6",
+
+   "U2MP11電量-總開關": "ns=2;s=OPCUA.PegatronOPC.974_U2MP11",
+   "U2MP21-1電量-總電源": "ns=2;s=OPCUA.PegatronOPC.1011_U2MP21",
+   "U2MP12-1電量-空調": "ns=2;s=OPCUA.PegatronOPC.961_U2MP12-1",
+   "U2MP12-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.975_U2MP12-2",
+   "U2MP13-1電量-空調": "ns=2;s=OPCUA.PegatronOPC.976_U2MP13-1",
+   "U2MP13-2電量-空調": "ns=2;s=OPCUA.PegatronOPC.962_U2MP13-2",
+   "U2MP13-3電量-空調": "ns=2;s=OPCUA.PegatronOPC.963_U2MP13-3",
+   "U2MP13-4電量-消防水泵": "ns=2;s=OPCUA.PegatronOPC.964_U2MP13-4",
+   "U2MP14-1電量-空壓": "ns=2;s=OPCUA.PegatronOPC.977_U2MP14-1",
+   "U2MP14-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.978_U2MP14-2",
+   "U2MP15-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.965_U2MP15-1",
+   "U2MP15-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.966_U2MP15-2",
+   "U2MP15-3電量-照明": "ns=2;s=OPCUA.PegatronOPC.967_U2MP15-3",
+   "U2MP15-4電量-空調": "ns=2;s=OPCUA.PegatronOPC.968_U2MP15-4",
+   "U2MP15-5電量-消防": "ns=2;s=OPCUA.PegatronOPC.969_U2MP15-5",
+   "U2MP15-6電量-消防": "ns=2;s=OPCUA.PegatronOPC.970_U2MP15-6",
+   "U2MP16-1電量-消防": "ns=2;s=OPCUA.PegatronOPC.971_U2MP16-1",
+   "U2MP16-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.972_U2MP16-2",
+   "U2MP16-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.979_U2MP16-3",
+   "U2MP17電量-聯絡櫃": "ns=2;s=OPCUA.PegatronOPC.973_U2MP17",
+   "U2MP22-1電量-空調": "ns=2;s=OPCUA.PegatronOPC.993_U2MP22-1",
+   "U2MP22-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.1000_U2MP22-2",
+   "U2MP23-1電量-空調": "ns=2;s=OPCUA.PegatronOPC.994_U2MP23-1",
+   "U2MP23-2電量-空調": "ns=2;s=OPCUA.PegatronOPC.995_U2MP23-2",
+   "U2MP23-3電量-空調": "ns=2;s=OPCUA.PegatronOPC.996_U2MP23-3",
+   "U2MP23-4電量-空調": "ns=2;s=OPCUA.PegatronOPC.1001_U2MP23-4",
+   "U2MP24-1電量-空壓": "ns=2;s=OPCUA.PegatronOPC.1002_U2MP24-1",
+   "U2MP24-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.1003_U2MP24-2",
+   "U2MP25-1電量-照明": "ns=2;s=OPCUA.PegatronOPC.997_U2MP25-1",
+   "U2MP25-2電量-生活水泵": "ns=2;s=OPCUA.PegatronOPC.998_U2MP25-2",
+   "U2MP25-4電量-污水站": "ns=2;s=OPCUA.PegatronOPC.999_U2MP25-4",
+   "U2MP25-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.1004_U2MP25-3",
+   "U2MP25-5電量-預留": "ns=2;s=OPCUA.PegatronOPC.1005_U2MP25-5",
+   "U2MP25-6電量-預留": "ns=2;s=OPCUA.PegatronOPC.1006_U2MP25-6",
+   "U2MP26-1電量-預留": "ns=2;s=OPCUA.PegatronOPC.1007_U2MP26-1",
+   "U2MP26-2電量-預留": "ns=2;s=OPCUA.PegatronOPC.1008_U2MP26-2",
+   "U2MP26-3電量-預留": "ns=2;s=OPCUA.PegatronOPC.1009_U2MP26-3",
+   "U2AH33電量-空調": "ns=2;s=OPCUA.PegatronOPC.1042_U2AH33",
+   "U2AH36電量-空壓": "ns=2;s=OPCUA.PegatronOPC.1043_U2AH36",
+   "U2AH43電量-空調": "ns=2;s=OPCUA.PegatronOPC.1044_U2AH43",
+   "U2AH44電量-空壓": "ns=2;s=OPCUA.PegatronOPC.1045_U2AH44",
+   "U2AH46電量-空壓": "ns=2;s=OPCUA.PegatronOPC.1046_U2AH46",
+}
+F3_COLS = (4, 36)
+HR_COLS = (37, 41)
+F4_COLS = (38, 77)
+F5_COLS = (94, 140)
+U2_COLS = (141, 182)
+# ============================================================
+# PHẦN 1A — OPC-UA COLLECTOR ĐIỆN
+# ============================================================
+async def collect_electric1():
+   if not os.path.exists(CSV_ELECTRIC1):
+       with open(CSV_ELECTRIC1, mode='w', newline='', encoding='utf-8-sig') as f:
+           csv.writer(f).writerow(["時間"] + list(MY_NODES_ELECTRIC1.keys()))
+   while True:
+       import datetime as dts
+       try:
+           now = dts.datetime.now()
+           minutes_to_next_10 = 10 - (now.minute % 10)
+           next_run = now.replace(minute=0, second=0, microsecond=0) + dts.timedelta(minutes=now.minute + minutes_to_next_10)
+           sleep_seconds = (next_run - now).total_seconds()
+           print(f"[ELECTRIC電1] 安全睡眠中，距離下個10分鐘整點還差 {sleep_seconds:.1f} 秒...")
+           await asyncio.sleep(sleep_seconds)
+       except Exception as timer_err:
+           print(f"[ELECTRIC電1] 計時計算發生異常: {timer_err}")
+           await asyncio.sleep(10)
+       ts = dts.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+       row = [ts]
+       try:
+           client = Client(url=URL_ELECTRIC1)
+           async with client:
+               print(f"[ELECTRIC電1] 時間到！重新連接 OPC-UA 成功 ({ts})")
+               for name, nid in MY_NODES_ELECTRIC1.items():
+                   try:
+                       node = client.get_node(nid)
+                       result = await node.read_value()
+                       if isinstance(result, str) and "|" in result:
+                           value = result.split("|")[-1]
+                       elif hasattr(result, "value"):
+                           value = result.value
+                       else:
+                           value = result
+                       row.append(value)
+                   except Exception as e:
+                       print(f"[COLLECTOR電1] 讀取 {name} 失敗: {e}")
+                       row.append("Error")
+           with open(CSV_ELECTRIC1, mode='a', newline='', encoding='utf-8-sig') as f:
+               csv.writer(f).writerow(row)
+           print(f"[ELECTRIC電1C] {ts} 數據成功寫入 CSV。")
+       except Exception as conn_err:
+           print(f"[ELECTRIC電1C] 本輪連線或寫入失敗 (將於下輪自動重試): {conn_err}")
+# ============================================================
+# PHẦN 1B — OPC-UA COLLECTOR NƯỚC
+# ============================================================
+async def collect_water2():
+   if not os.path.exists(CSV_WATER2):
+       with open(CSV_WATER2, mode='w', newline='', encoding='utf-8-sig') as f:
+           csv.writer(f).writerow(["時間"] + list(MY_NODES_WATER2.keys()))
+   while True:
+       import datetime as dts
+       try:
+           now = dts.datetime.now()
+           next_run = now.replace(
+               minute=0, second=0, microsecond=0
+           ) + dts.timedelta(hours=1)
+           sleep_seconds = (next_run - now).total_seconds()
+           print(
+               f"[WATER水2] 安全睡眠中，距離下個整點還差 {sleep_seconds:.1f} 秒..."
+           )
+           await asyncio.sleep(sleep_seconds)
+       except Exception as timer_err:
+           print(f"[WATER水2] 計時計算異常: {timer_err}")
+           await asyncio.sleep(10)  # 防呆延時
+       ts = dts.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+       row = [ts]
+       try:
+           client = Client(url=URL_WATER2)
+           async with client:
+               print(f"[WATER水2] 整點到了！重新連接 OPC-UA 成功 ({ts})")
+               for name, nid in MY_NODES_WATER2.items():
+                   try:
+                       node = client.get_node(nid)
+                       result = await node.read_value()
+                       if hasattr(result, "value"):
+                           row.append(result.value)
+                       else:
+                           row.append(result)
+                   except Exception as e:
+                       print(
+                           f"[COLLECTOR水2] 讀取 {name} 失敗: {e}"
+                       )
+                       row.append(None)
+           with open(
+                   CSV_WATER2, mode="a", newline="", encoding="utf-8-sig"
+           ) as f:
+               csv.writer(f).writerow(row)
+           print(f"[WATER水2C] {ts} 數據成功寫入 CSV。")
+       except Exception as conn_err:
+           print(
+               f"[WATER水2C] 本輪連線失敗 (下個整點會自動嘗試重新連線): {conn_err}"
+           )
+# ============================================================
+# PHẦN 3A — OPC-UA COLLECTOR ĐIỆN(二期電)
+# ============================================================
+async def collect_electric2():
+   if not os.path.exists(CSV_ELECTRIC2):
+       with open(CSV_ELECTRIC2, mode='w', newline='', encoding='utf-8-sig') as f:
+           csv.writer(f).writerow(["時間"] + list(MY_NODES_ELECTRIC2.keys()))
+   while True:
+       import datetime as dts
+       try:
+           now = dts.datetime.now()
+           minutes_to_next_10 = 10 - (now.minute % 10)
+           next_run = now.replace(minute=0, second=0, microsecond=0) + dts.timedelta(minutes=now.minute + minutes_to_next_10)
+           sleep_seconds = (next_run - now).total_seconds()
+           print(f"[ELECTRIC電2] 安全睡眠中，距離下個10分鐘整點還差 {sleep_seconds:.1f} 秒...")
+           await asyncio.sleep(sleep_seconds)
+       except Exception as timer_err:
+           print(f"[ELECTRIC電2] 計時計算發生異常: {timer_err}")
+           await asyncio.sleep(10)
+       ts = dts.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+       row = [ts]
+       try:
+           client = Client(url=URL_ELECTRIC2)
+           async with client:
+               print(f"[ELECTRIC電2] 時間到！重新連接 OPC-UA 成功 ({ts})")
+               for name, nid in MY_NODES_ELECTRIC2.items():
+                   try:
+                       node = client.get_node(nid)
+                       result = await node.read_value()
+                       if isinstance(result, str) and "|" in result:
+                           value = result.split("|")[-1]
+                       elif hasattr(result, "value"):
+                           value = result.value
+                       else:
+                           value = result
+                       row.append(value)
+                   except Exception as e:
+                       print(f"[COLLECTOR電2] 讀取 {name} 失敗: {e}")
+                       row.append("Error")
+           with open(CSV_ELECTRIC2, mode='a', newline='', encoding='utf-8-sig') as f:
+               csv.writer(f).writerow(row)
+           print(f"[ELECTRIC電2C] {ts} 數據成功寫入 CSV。")
+       except Exception as conn_err:
+           print(f"[ELECTRIC電2C] 本輪連線或寫入失敗 (將於下輪自動重試): {conn_err}")
+async def opc_main():
+   await asyncio.gather(collect_electric1(), collect_water2(), collect_electric2())
+def run_opc_thread():
+   loop = asyncio.new_event_loop()
+   asyncio.set_event_loop(loop)
+   try:
+       loop.run_until_complete(opc_main())
+   except KeyboardInterrupt:
+       pass
+   finally:
+       loop.close()
+# ============================================================
+# PHẦN 2A — PROCESSOR ĐIỆN
+# ============================================================
+def process_electric1():
+   try:
+       if not os.path.exists(CSV_ELECTRIC1):
+           return
+       df = pd.read_csv(CSV_ELECTRIC1)
+       for col in df.columns[1:]:
+           df[col] = pd.to_numeric(df[col], errors='coerce')
+       df['時間'] = pd.to_datetime(df['時間'],format="mixed",errors="coerce")
+       df_hourly = df.set_index('時間').resample('10min').last().ffill()
+       df_usage  = df_hourly.diff().fillna(0)
+       df_usage[df_usage < 0] = 0
+       f1 = df_usage.iloc[:, F1_COLS[0]:F1_COLS[1]].sum(axis=1)
+       f2 = df_usage.iloc[:, F2_COLS[0]:F2_COLS[1]].sum(axis=1)
+       u1 = df_usage.iloc[:, U1_COLS[0]:U1_COLS[1]].sum(axis=1)
+       df_usage.insert(0, 'U1總用量', u1)
+       df_usage.insert(0, 'F2總用量', f2)
+       df_usage.insert(0, 'F1總用量', f1)
+       df_hourly = df_hourly.round(2)
+       df_usage  = df_usage.round(2)
+       with pd.ExcelWriter(XLSX_ELECTRIC1, engine='openpyxl') as writer:
+           df_hourly.to_excel(writer, sheet_name='10分鐘累計數值1')
+           df_usage.to_excel(writer,  sheet_name='每10分鐘用量1')
+       print(f"[ELECTRIC電1E PROC] {time.strftime('%H:%M:%S')} Excel cập nhật thành công")
+   except Exception as e:
+       print(f"[ELECTRIC電1E PROC] Lỗi: {e}")
+# ============================================================
+# PHẦN 2B — PROCESSOR NƯỚC
+# ============================================================
+def process_water2():
+   try:
+       if not os.path.exists(CSV_WATER2):
+           return
+       df = pd.read_csv(CSV_WATER2)
+       df.replace("Error", pd.NA, inplace=True)
+       for col in df.columns[1:]:
+           df[col] = pd.to_numeric(df[col], errors='coerce')
+       df['時間'] = pd.to_datetime(df['時間'],format="mixed",errors="coerce")
+       df_h = df.set_index('時間').resample('60min').last().ffill()
+       df_usage = df_h.diff().fillna(0)
+       df_usage[df_usage < 0] = 0
+       df_h     = df_h.round(2)
+       df_usage = df_usage.round(2)
+       with pd.ExcelWriter(XLSX_WATER2, engine='openpyxl') as writer:
+           df_h.to_excel(writer,     sheet_name='每小時累計數值')
+           df_usage.to_excel(writer, sheet_name='每小時用量')
+       print(f"[WATER水2E PROC] {time.strftime('%H:%M:%S')} Excel cập nhật thành công")
+   except Exception as e:
+       print(f"[WATER水2E PROC] Lỗi: {e}")
+# ============================================================
+# PHẦN 3A — PROCESSOR ĐIỆN二期電
+# ============================================================
+def process_electric2():
+    try:
+        if not os.path.exists(CSV_ELECTRIC2):
+            return
+        df = pd.read_csv(CSV_ELECTRIC2)
+        for col in df.columns[1:]:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df['時間'] = pd.to_datetime(df['時間'],format="mixed",errors="coerce")
+        df_hourly = df.set_index('時間').resample('10min').last().ffill()
+        df_usage = df_hourly.diff().fillna(0)
+        df_usage[df_usage < 0] = 0
+        f3_usage = df_usage.iloc[:, 4:36].sum(axis=1)
+        hr_usage = df_usage.iloc[:, 37:41].sum(axis=1)
+        f4_usage = df_usage.iloc[:, 42:91].sum(axis=1)
+        f5_usage = df_usage.iloc[:, 94:140].sum(axis=1)
+        u2_usage = df_usage.iloc[:, 141:182].sum(axis=1)
+        df_usage.insert(0, 'U2總用量', u2_usage)
+        df_usage.insert(0, 'F5總用量', f5_usage)
+        df_usage.insert(0, 'F4總用量', f4_usage)
+        df_usage.insert(0, 'HR總用量', hr_usage)
+        df_usage.insert(0, 'F3總用量', f3_usage)
+        df_hourly = df_hourly.round(2)
+        df_usage = df_usage.round(2)
+        with pd.ExcelWriter(XLSX_ELECTRIC2, engine='openpyxl') as writer:
+            df_hourly.to_excel(writer, sheet_name='10分鐘累計數值2')
+            df_usage.to_excel(writer, sheet_name='每10分鐘用量2')
+        print(f"[ELECTRIC電2E PROC] {time.strftime('%H:%M:%S')} Excel cập nhật thành công")
+    except Exception as e:
+        print(f"[ELECTRIC電2E PROC] Lỗi: {e}")
+def run_processor_thread():
+   print("[PROCESSOR] Khởi động, kiểm tra mỗi 60 giây...")
+   while True:
+       try:
+           process_electric1()
+           process_water2()
+           process_electric2()
+           time.sleep(600)
+       except Exception as e:
+           print(f"[PROCESSOR] Lỗi: {e}")
+           time.sleep(600)
+# ============================================================
+# PHẦN 3 — API DATA
+# ============================================================
+def get_electric1_data():
+   if not os.path.exists(XLSX_ELECTRIC1):
+       return {"error": "Chưa có file Excel điện"}
+   try:
+       xl = pd.ExcelFile(XLSX_ELECTRIC1)
+       if '每10分鐘用量1' not in xl.sheet_names:
+           return {"error": "Sheet chưa tồn tại, chờ processor chạy"}
+       df = pd.read_excel(XLSX_ELECTRIC1, sheet_name='每10分鐘用量1', index_col=0)
+       df.index = pd.to_datetime(df.index)
+       latest   = df.index[-1]
+       today    = df[df.index.date == latest.date()]
+       def s(col):
+           return float(today[col].sum() if not today.empty else df[col].iloc[-96:].sum())
+       f1, f2, u1 = s('F1總用量'), s('F2總用量'), s('U1總用量')
+       day_df     = today if not today.empty else df.iloc[-min(96,len(df)):]
+       month_df   = df.resample('D').sum().tail(30)
+       year_df    = df.resample('ME').sum().tail(12)
+       return {
+           "latest_time": latest.strftime('%Y-%m-%d %H:%M:%S'),
+           "metrics": {"F1": round(f1,2), "F2": round(f2,2), "U1": round(u1,2)},
+           "charts": {
+               "day":   {"labels": day_df.index.strftime('%H:%M').tolist(),
+                         "F1": day_df['F1總用量'].tolist(), "F2": day_df['F2總用量'].tolist(), "U1": day_df['U1總用量'].tolist()},
+               "month": {"labels": month_df.index.strftime('%m-%d').tolist(),
+                         "F1": month_df['F1總用量'].tolist(), "F2": month_df['F2總用量'].tolist(), "U1": month_df['U1總用量'].tolist()},
+               "year":  {"labels": year_df.index.strftime('%Y-%m').tolist(),
+                         "F1": year_df['F1總用量'].tolist(), "F2": year_df['F2總用量'].tolist(), "U1": year_df['U1總用量'].tolist()},
+           }
+       }
+   except Exception as e:
+       return {"error": str(e)}
+def get_electric2_data():
+   if not os.path.exists(XLSX_ELECTRIC2):
+       return {"error": "Chưa có file Excel điện"}
+   try:
+       xl = pd.ExcelFile(XLSX_ELECTRIC2)
+       if '每10分鐘用量2' not in xl.sheet_names:
+           return {"error": "Sheet chưa tồn tại, chờ processor chạy"}
+       df = pd.read_excel(XLSX_ELECTRIC2, sheet_name='每10分鐘用量2', index_col=0)
+       df.index = pd.to_datetime(df.index.astype(str),format="mixed",errors="coerce")
+       latest   = df.index[-1]
+       today    = df[df.index.date == latest.date()]
+       def s(col):
+           return float(today[col].sum() if not today.empty else df[col].iloc[-96:].sum())
+       f3, hr, f4, f5, u2 = s('F3總用量'), s('HR總用量'), s('F4總用量'), s('F5總用量'), s('U2總用量')
+       day_df     = today if not today.empty else df.iloc[-min(96,len(df)):]
+       month_df   = df.resample('D').sum().tail(30)
+       year_df    = df.resample('ME').sum().tail(12)
+       return {
+           "latest_time": latest.strftime('%Y-%m-%d %H:%M:%S'),
+           "metrics": {"F3": round(f3,2), "HR": round(hr,2), "F4": round(f4,2), "F5": round(f5,2), "U2": round(u2,2)},
+           "charts": {
+               "day":   {"labels": day_df.index.strftime('%H:%M').tolist(),
+                         "F3": day_df['F3總用量'].tolist(), "HR": day_df['HR總用量'].tolist(), "F4": day_df['F4總用量'].tolist(), "F5": day_df['F5總用量'].tolist(), "U2": day_df['U2總用量'].tolist()},
+               "month": {"labels": month_df.index.strftime('%m-%d').tolist(),
+                         "F3": month_df['F3總用量'].tolist(), "HR": month_df['HR總用量'].tolist(), "F4": month_df['F4總用量'].tolist(), "F5": month_df['F5總用量'].tolist(), "U2": month_df['U2總用量'].tolist()},
+               "year":  {"labels": year_df.index.strftime('%Y-%m').tolist(),
+                         "F3": year_df['F3總用量'].tolist(), "HR": year_df['HR總用量'].tolist(), "F4": year_df['F4總用量'].tolist(), "F5": year_df['F5總用量'].tolist(), "U2": year_df['U2總用量'].tolist()},
+           }
+       }
+   except Exception as e:
+       return {"error": str(e)}
+def get_water2_data():
+   if not os.path.exists(CSV_WATER2):
+       return {"error": "Chưa có file CSV nước"}
+   try:
+       df = pd.read_csv(CSV_WATER2)
+       df.replace("Error", pd.NA, inplace=True)
+       for col in df.columns[1:]:
+           df[col] = pd.to_numeric(df[col], errors='coerce')
+       df['時間'] = pd.to_datetime(df['時間'])
+       df = df.set_index('時間')
+       latest = df.index[-1]
+       # Giá trị hiện tại
+       current = {}
+       for name in MY_NODES_WATER2.keys():
+           if name in df.columns:
+               val = df[name].dropna()
+               current[name] = float(val.iloc[-1]) if len(val) > 0 else 0.0
+       # Thành:
+       df_h = df.resample('60min').last().ffill()
+       df_usage = df_h.diff().fillna(0)
+       df_usage[df_usage < 0] = 0
+       today_usage = df_usage[df_usage.index.date == latest.date()]
+       for name in MY_NODES_WATER2.keys():
+           if name in today_usage.columns:
+               current[name] = float(today_usage[name].sum())
+           else:
+               current[name] = 0.0
+       # Biểu đồ 6 đồng hồ đầu
+       df_h     = df.resample('60min').last().ffill()
+       df_usage = df_h.diff().fillna(0)
+       df_usage[df_usage < 0] = 0
+       today    = df_usage[df_usage.index.date == latest.date()]
+       day_df   = today if not today.empty else df_usage.iloc[-24:]
+       month_df = df_usage.resample('D').sum().tail(30)
+       year_df  = df_usage.resample('ME').sum().tail(12)
+       # Biểu đồ multi-line: mỗi view có labels + data cho từng key
+       def build_chart(df_src, fmt):
+           result = {"labels": df_src.index.strftime(fmt).tolist()}
+           for key in WATER_CHART_KEYS:
+               result[key] = df_src[key].tolist() if key in df_src.columns else []
+           return result
+       return {
+           "latest_time": latest.strftime('%Y-%m-%d %H:%M:%S'),
+           "current": current,
+           "limits":  WATER_LIMITS,
+           "chart_keys": WATER_CHART_KEYS,
+           "charts": {
+               "day":   build_chart(day_df,   '%H:%M'),
+               "month": build_chart(month_df, '%m-%d'),
+               "year":  build_chart(year_df,  '%Y-%m'),
+           }
+       }
+   except Exception as e:
+       return {"error": str(e)}
+# ============================================================
+# PHẦN 4 — HTTP DASHBOARD (1 trang, 2 tab)
+# ============================================================
+class CombinedDashboard(http.server.SimpleHTTPRequestHandler):
+   def do_GET(self):
+       if self.path == '/api/electric':
+           # 同時讀取兩組數據
+           data1 = get_electric1_data()
+           data2 = get_electric2_data()
+           # 打包成一個大字典回傳
+           combined_data = {
+               "electric1": data1,
+               "electric2": data2,
+           }
+           self._json(combined_data)
+       elif self.path == '/api/water':
+           self._json(get_water2_data())
+       else:
+           self._html()
+   def _json(self, data):
+       self.send_response(200)
+       self.send_header('Content-type', 'application/json; charset=utf-8')
+       self.end_headers()
+       self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
+   def _html(self):
+       self.send_response(200)
+       self.send_header('Content-type', 'text/html; charset=utf-8')
+       self.end_headers()
+       html = f"""<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>廠區能源 + 用水監控系統</title>
+<script>{CHART_JS}</script>
+<style>
+* {{box-sizing:border-box;margin:0;padding:0;}}
+body {{background:#0d1117;color:#fff;font-family:'Segoe UI',sans-serif;}}
+header {{background:#161b22;padding:16px 32px;border-bottom:1px solid #30363d;display:flex;justify-content:space-between;align-items:center;}}
+header h1 {{font-size:1.2em;color:#58a6ff;}}
+.meta {{font-size:0.8em;color:#8b949e;}}
+.tabs {{display:flex;background:#161b22;border-bottom:1px solid #30363d;padding:0 32px;}}
+.tab {{padding:12px 28px;cursor:pointer;font-size:0.95em;color:#8b949e;border-bottom:2px solid transparent;transition:.2s;}}
+.tab.active {{color:#58a6ff;border-bottom-color:#58a6ff;}}
+.tab-content {{display:none;padding:24px 32px;}}
+.tab-content.active {{display:block;}}
+/* ĐIỆN */
+.card-row {{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-bottom:24px;}}
+.ecard {{background:linear-gradient(145deg,#1e293b,#111827);padding:15px;border-radius:12px;border:1px solid #334155;}}
+.ecard h3 {{font-size:14px;font-weight:600;margin-bottom:8px;}}
+.ecard p {{font-size:2em;font-weight:700;color:#f8fafc;}}
+.ecard span {{font-size:14px;color:#7dd3fc;margin-left:4px;}}
+.btn-group {{margin-bottom:16px;}}
+.ebtn {{background:#1e293b;border:1px solid #475569;color:#94a3b8;padding:8px 18px;margin-right:8px;border-radius:6px;cursor:pointer;}}
+.ebtn.active {{background:#38bdf8;color:#0f172a;border-color:#38bdf8;}}
+.chart-box {{background:#1e293b;padding:20px;border-radius:12px;border:1px solid #334155;height:420px;}}
+/* NƯỚC */
+.wgrid {{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;}}
+.wcard {{background:#161b22;padding:12px 16px;border-radius:10px;border:1px solid #30363d;text-align:center;transition:transform .2s;}}
+.wcard:hover {{transform:translateY(-2px);}}
+.wcard.alert  {{border-top:3px solid #f85149;background:#2d1616;}}
+.wcard.normal {{border-top:3px solid #3fb950;background:#162616;}}
+.wlabel {{font-size:0.78em;color:#8b949e;margin-bottom:3px;}}
+.wvalue {{font-size:1.6em;font-weight:bold;margin:4px 0;}}
+.wunit  {{font-size:0.8em;color:#58a6ff;margin-top:-2px;}}
+.wlimit {{font-size:0.7em;color:#6e7681;}}
+.wchart-title {{font-size:1em;color:#58a6ff;margin-bottom:12px;}}
+.wbtn {{background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:6px 16px;border-radius:6px;cursor:pointer;margin:0 4px;}}
+.wbtn.active {{background:#1f6feb;color:#fff;border-color:#1f6feb;}}
+.wchart-area {{background:#161b22;padding:20px;border-radius:12px;border:1px solid #30363d;height:360px;margin-top:16px;}}
+#sync-e, #sync-w {{font-size:0.8em;color:#8b949e;}}
+</style>
+</head>
+<body>
+<header>
+<h1>⚡💧 廠區能源 + 用水監控系統</h1>
+<div class="meta" id="clock"></div>
+</header>
+<!-- TABS -->
+<div class="tabs">
+<div class="tab active" onclick="switchTab('electric',this)">⚡ 一二期電力</div>
+<div class="tab" onclick="switchTab('water',this)">💧 二期用水</div>
+</div>
+<!-- TAB ĐIỆN -->
+<div id="tab-electric" class="tab-content active">
+<div id="sync-e" style="margin-bottom:12px;">載入中...</div>
+<div class="card-row">
+<div class="ecard" style="border-top:4px solid #64748b;">
+<h3 style="color:#64748b;">⚡ F1棟 總電能能耗</h3>
+<p id="v-f1">--<span>kWh</span></p>
+</div>
+<div class="ecard" style="border-top:4px solid #38bdf8;">
+<h3 style="color:#38bdf8;">⚡ F2棟 總電能能耗</h3>
+<p id="v-f2">--<span>kWh</span></p>
+</div>
+<div class="ecard" style="border-top:4px solid #34d399;">
+<h3 style="color:#34d399;">⚡ U1棟 總電能能耗</h3>
+<p id="v-u1">--<span>kWh</span></p>
+</div>
+<div class="ecard" style="border-top:4px solid #fb7185;">
+<h3 style="color:#fb7185;">⚡ F3棟 總電能能耗</h3>
+<p id="v-f3">--<span>kWh</span></p>
+</div>
+<div class="ecard" style="border-top:4px solid #a78bfa;">
+<h3 style="color:#a78bfa;">⚡ HR棟 總電能能耗</h3>
+<p id="v-hr">--<span>kWh</span></p>
+</div>
+<div class="ecard" style="border-top:4px solid 	#fb923c;">
+<h3 style="color:#fb923c;">⚡ F4棟 總電能能耗</h3>
+<p id="v-f4">--<span>kWh</span></p>
+</div>
+<div class="ecard" style="border-top:4px solid 	#fbbf24;">
+<h3 style="color:#fbbf24;">⚡ F5棟 總電能能耗</h3>
+<p id="v-f5">--<span>kWh</span></p>
+</div>
+<div class="ecard" style="border-top:4px solid 	#2dd4bf;">
+<h3 style="color:#2dd4bf;">⚡ U2棟 總電能能耗</h3>
+<p id="v-u2">--<span>kWh</span></p>
+</div>
+</div>
+<div class="btn-group">
+<button class="ebtn active" onclick="switchEView('day',this)">日看板</button>
+<button class="ebtn" onclick="switchEView('month',this)">月看板</button>
+<button class="ebtn" onclick="switchEView('year',this)">年看板</button>
+</div>
+<div class="chart-box"><canvas id="eChart"></canvas></div>
+</div>
+<!-- TAB NƯỚC -->
+<div id="tab-water" class="tab-content">
+<div id="sync-w" style="margin-bottom:12px;">載入中...</div>
+<div class="wgrid" id="wgrid"></div>
+<div class="btn-group">
+<button class="wbtn active" onclick="switchWView('day',this)">日看板</button>
+<button class="wbtn" onclick="switchWView('month',this)">月看板</button>
+<button class="wbtn" onclick="switchWView('year',this)">年看板</button>
+</div>
+<div class="chart-box"><canvas id="wChart"></canvas></div>
+</div>
+<script>
+// ---- Clock ----
+setInterval(() => {{
+ document.getElementById('clock').textContent = new Date().toLocaleString('zh-TW');
+}}, 1000);
+// ---- Tab switch ----
+function switchTab(name, btn) {{
+ document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+ document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+ btn.classList.add('active');
+ document.getElementById('tab-' + name).classList.add('active');
+}}
+// ============================================================
+// ĐIỆN
+// ============================================================
+let eData = null, eData2 = null, eChart = null, eView = 'day';
+async function loadElectric() {{
+ try {{
+   const r = await fetch('/api/electric');
+   const res = await r.json();
+   eData = res.electric1;
+   eData2 = res.electric2;
+   if (eData.error) {{ document.getElementById('sync-e').textContent = '⚠ ' + eData.error; return; }}
+   document.getElementById('sync-e').textContent = '最後更新: ' + eData.latest_time;
+   const fmt = v => v.toLocaleString('zh-TW', {{minimumFractionDigits:2, maximumFractionDigits:2}});
+   document.getElementById('v-f1').innerHTML = fmt(eData.metrics.F1) + '<span>kWh</span>';
+   document.getElementById('v-f2').innerHTML = fmt(eData.metrics.F2) + '<span>kWh</span>';
+   document.getElementById('v-u1').innerHTML = fmt(eData.metrics.U1) + '<span>kWh</span>';
+   document.getElementById('v-f3').innerHTML = fmt(eData2.metrics.F3) + '<span>kWh</span>';
+   document.getElementById('v-hr').innerHTML = fmt(eData2.metrics.HR) + '<span>kWh</span>';
+   document.getElementById('v-f4').innerHTML = fmt(eData2.metrics.F4) + '<span>kWh</span>';
+   document.getElementById('v-f5').innerHTML = fmt(eData2.metrics.F5) + '<span>kWh</span>';
+   document.getElementById('v-u2').innerHTML = fmt(eData2.metrics.U2) + '<span>kWh</span>';
+   renderEChart(eView);
+ }} catch(e) {{ document.getElementById('sync-e').textContent = '錯誤: ' + e; }}
+}}
+function renderEChart(type) {{
+ if (!eData) return;
+ const ctx = document.getElementById('eChart').getContext('2d');
+ if (eChart) eChart.destroy();
+ const c = eData.charts[type];
+ const c2 = eData2.charts[type];
+ eChart = new Chart(ctx, {{
+   type: 'line',
+   data: {{
+     labels: c.labels,
+     datasets: [
+       {{label:'F1棟', data:c.F1, borderColor:'#64748b', borderWidth:2.5, tension:0.3, pointRadius:2, fill:false}},
+       {{label:'F2棟', data:c.F2, borderColor:'#38bdf8', borderWidth:2.5, tension:0.3, pointRadius:2, fill:false}},
+       {{label:'U1棟', data:c.U1, borderColor:'#34d399', borderWidth:2.5, tension:0.3, pointRadius:2, fill:false}},
+       {{label:'F3棟', data:c2.F3, borderColor:'#fb7185', borderWidth:2.5, tension:0.3, pointRadius:2, fill:false}},
+       {{label:'HR棟', data:c2.HR, borderColor:'#a78bfa', borderWidth:2.5, tension:0.3, pointRadius:2, fill:false}},
+       {{label:'F4棟', data:c2.F4, borderColor:'#fb923c', borderWidth:2.5, tension:0.3, pointRadius:2, fill:false}},
+       {{label:'F5棟', data:c2.F5, borderColor:'#fbbf24', borderWidth:2.5, tension:0.3, pointRadius:2, fill:false}},
+       {{label:'U2棟', data:c2.U2, borderColor:'#2dd4bf', borderWidth:2.5, tension:0.3, pointRadius:2, fill:false}},
+     ]
+   }},
+   options: {{
+     responsive:true, maintainAspectRatio:false,
+     plugins:{{legend:{{labels:{{color:'#e2e8f0'}}}}}},
+     scales:{{
+       x:{{grid:{{color:'#334155'}}, ticks:{{color:'#94a3b8', maxTicksLimit:12}}}},
+       y:{{grid:{{color:'#334155'}}, ticks:{{color:'#94a3b8'}}, title:{{display:true,text:'用量 (kWh)',color:'#94a3b8'}}}}
+     }}
+   }}
+ }});
+}}
+function switchEView(type, btn) {{
+ eView = type;
+ document.querySelectorAll('.ebtn').forEach(b => b.classList.remove('active'));
+ btn.classList.add('active');
+ renderEChart(type);
+}}
+// ============================================================
+// NƯỚC
+// ============================================================
+const W_COLORS = ['#58a6ff','#3fb950','#f85149','#fbbf24','#a371f7','#39d353'];
+let wData = null, wChart = null, wView = 'day';
+async function loadWater() {{
+ try {{
+   const r = await fetch('/api/water');
+   wData = await r.json();
+   if (wData.error) {{ document.getElementById('sync-w').textContent = '⚠ ' + wData.error; return; }}
+   document.getElementById('sync-w').textContent = '最後更新: ' + wData.latest_time + ' | 每60秒自動刷新';
+   renderWCards();
+   renderWChart(wView);
+ }} catch(e) {{ document.getElementById('sync-w').textContent = '錯誤: ' + e; }}
+}}
+function renderWCards() {{
+ const grid = document.getElementById('wgrid');
+ grid.innerHTML = '';
+ for (const name of wData.chart_keys) {{
+   const val = wData.current[name];
+   const limit = wData.limits[name] || 0;
+   const isAlert = limit > 0 && val > limit;
+   const div = document.createElement('div');
+   div.className = 'wcard ' + (isAlert ? 'alert' : 'normal');
+div.innerHTML = `
+<div class="wlabel">💧 ${{name}}</div>
+<div class="wvalue">${{parseFloat(val).toFixed(2)}}</div>
+<div class="wunit">m³</div>
+<div class="wlimit">${{isAlert?'⚠':'✅'}} 門檻: ${{limit}} m³</div>
+`;
+   grid.appendChild(div);
+ }}
+}}
+function renderWChart(type) {{
+ if (!wData || !wData.charts) return;
+ const ctx = document.getElementById('wChart').getContext('2d');
+ if (wChart) wChart.destroy();
+ const c = wData.charts[type];
+ const keys = wData.chart_keys;
+ const datasets = keys.map((key, i) => ({{
+   label: key,
+   data: c[key] || [],
+   borderColor: W_COLORS[i % W_COLORS.length],
+   borderWidth: 2.5,
+   tension: 0.3,
+   pointRadius: 2,
+   fill: false,
+ }}));
+ wChart = new Chart(ctx, {{
+   type: 'line',
+   data: {{ labels: c.labels, datasets }},
+   options: {{
+     responsive: true, maintainAspectRatio: false,
+     plugins: {{ legend: {{ labels: {{ color: '#e2e8f0', font: {{ size: 11 }} }} }} }},
+     scales: {{
+       x: {{ grid: {{ color: '#30363d' }}, ticks: {{ color: '#8b949e', maxTicksLimit: 12 }} }},
+       y: {{ grid: {{ color: '#30363d' }}, ticks: {{ color: '#8b949e' }},
+             title: {{ display: true, text: '用量 (m³)', color: '#8b949e' }} }}
+     }}
+   }}
+ }});
+}}
+function switchWView(type, btn) {{
+ wView = type;
+ document.querySelectorAll('.wbtn').forEach(b => b.classList.remove('active'));
+ btn.classList.add('active');
+ renderWChart(type);
+}}
+// ---- Init & auto refresh ----
+loadElectric();
+loadWater();
+setInterval(loadElectric, 60000);
+setInterval(loadWater, 60000);
+</script>
+</body>
+</html>"""
+       self.wfile.write(html.encode('utf-8'))
+   def log_message(self, format, *args):
+       pass  # tắt log
+def run_dashboard_thread():
+   with socketserver.TCPServer(("", PORT), CombinedDashboard) as httpd:
+       httpd.allow_reuse_address = True
+       print(f"[DASHBOARD] http://localhost:{PORT}")
+       httpd.serve_forever()
+# ============================================================
+# MAIN
+# ============================================================
+if __name__ == "__main__":
+   print("=" * 55)
+   print("  廠區能源 + 用水監控系統 — 啟動中")
+   print("=" * 55)
+   threading.Thread(target=run_processor_thread, daemon=True, name="Processor").start()
+   threading.Thread(target=run_dashboard_thread, daemon=True, name="Dashboard").start()
+   try:
+       run_opc_thread()
+   except KeyboardInterrupt:
+       print("\n程式已手動停止。")
